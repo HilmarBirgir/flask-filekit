@@ -58,7 +58,7 @@ class BoundField(object):
         """ If file does not yet exist we generate the file now. """
         if not os.path.exists(self.path):
             self.save()
-        return self.fkit.uset.url(self.path)
+        return self.fkit.uset.url(os.path.join(self.folder, self.get_filename()))
         
 
 class Field(object):
@@ -133,11 +133,9 @@ class FileKit(object):
         """
         if not isinstance(storage, FileStorage):
             storage = FileStorage(storage, filename=filename)
-            # , 'must file pointer or yield strings'
         filename = cls.uset.save(storage, name=filename)
         instance = cls(filename)
         instance.process(force=False)
-        instance.filename = filename
         return instance
     
     def process(self, force=True):
