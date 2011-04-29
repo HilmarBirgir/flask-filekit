@@ -11,8 +11,12 @@ This module makes it easier to declare files and their derivative versions
 
 import os.path
 from werkzeug import FileStorage
-from flaskext.uploads import UploadSet, DEFAULTS
+from flask import Module, jsonify, abort, current_app, request
+from flaskext.uploads import UploadSet, DEFAULTS, configure_uploads
 
+
+class FileNotFound(Exception):
+    pass
 
 class DeclarativeFieldsMetaclass(type):
     def __new__(cls, name, bases, attrs):
@@ -20,6 +24,8 @@ class DeclarativeFieldsMetaclass(type):
         for field_name, obj in attrs.items():
             if isinstance(obj, Field):
                 attrs['fields'][field_name] = attrs.pop(field_name)
+        if not 'name' in attrs:
+            attrs['name'] = name.lower()
         new_class = super(DeclarativeFieldsMetaclass,
                      cls).__new__(cls, name, bases, attrs)
         return new_class
@@ -31,6 +37,7 @@ class BoundField(object):
         self.folder = folder
         self._field = field
         self.fkit = fkit
+        self.uset = self.fkit.get_upload_set()
     
     def get_filename(self):
         """ Fields should respect the `ext` parameter and overwrite the source
@@ -47,18 +54,18 @@ class BoundField(object):
         with open(self.fkit.path) as fp:
             for processor in self._field.processors:
                 fp = processor(fp)
-            self.fkit.uset.save(FileStorage(fp), folder=self.folder, name=self.get_filename())
+            self.uset.save(FileStorage(fp), folder=self.folder, name=self.get_filename())
         
     @property
     def path(self):
-        return self.fkit.uset.path(os.path.join(self.folder, self.get_filename()))
+        return self.uset.path(os.path.join(self.folder, self.get_filename()))
         
     @property
     def url(self):
         """ If file does not yet exist we generate the file now. """
         if not os.path.exists(self.path):
             self.save()
-        return self.fkit.uset.url(os.path.join(self.folder, self.get_filename()))
+        return self.uset.url(os.path.join(self.folder, self.get_filename()))
         
 
 class Field(object):
@@ -91,7 +98,73 @@ class Field(object):
             return self.processors[-1].ext
         return self.ext
 
+filekits_mod = Module(__name__, name='_filekits', url_prefix='/_filekits')
 
+@filekits_mod.route('/<label>/<path:filename>')
+def file_info(label, filename):
+    """
+    A view to fetch information about a file. The response 
+    body is a JSON payload with all url's for all fields.
+    
+    """
+    filekit = current_app.filekits.get(label)
+    if filekit is None: 
+        abort(404)
+    try:
+        fkit = filekit(filename)
+    except FileNotFound:
+        abort(404)
+    return jsonify(fkit.to_dict())
+
+@filekits_mod.route('/<label>', methods=['POST'])
+def upload(label):
+    """
+    Use this view to upload one or more files to a filekit.
+    The response body is a JSON payload with filekit info.
+    
+    {
+      'files': [
+        {'original': '/url/x.jpg', 
+         'name': 'x.jpg', 
+         'thumbnail': '/url/thumbnail/x.jpg'
+        }
+      ]
+    }
+    
+    """
+    filekit = current_app.filekits.get(label)
+    if filekit is None:
+        abort(404)
+    _files = []
+    for image in request.files.getlist('files'):
+        fkit = filekit.save(image)
+        fkit_dict = fkit.to_dict()
+        fkit_dict['original'] = fkit.url
+        fkit_dict['name'] = fkit.filename
+        _files.append(fkit_dict)
+    return jsonify({'files': _files})
+
+
+def configure_filekits(app, filekits):
+    """
+    Call this to register the filekit. A `_filekit` module is
+    configured to handle uploads and JSON HTTP points for the
+    filekits. Each filekit's uset (Flask-Uploads upload set) 
+    is also registered for serving the actual file in 
+    development mode. 
+    
+    """
+    if isinstance(filekits, FileKit):
+        filekits = (filekits,)
+    if '_filekits' not in app.modules:
+        app.register_module(filekits_mod)
+    if not hasattr(app, 'filekits'):
+        app.filekits = {}
+    for filekit in filekits:
+        app.filekits[filekit.name] = filekit
+        configure_uploads(app, filekit.get_upload_set())
+    
+        
 class FileKit(object):
     """
     Subclasses of `filekit.FileKit` act as specification for a certain type
@@ -110,12 +183,16 @@ class FileKit(object):
     """
     __metaclass__ = DeclarativeFieldsMetaclass
     
-    uset = UploadSet('files', DEFAULTS) # Overwrite
-    
     def __init__(self, filename):
         self.filename = filename
+        if not os.path.exists(self.path):
+            raise FileNotFound
         for folder, field in self.fields.items():
             setattr(self, folder, BoundField(folder, field, self))
+    
+    @classmethod
+    def get_upload_set(cls):
+        return UploadSet(cls.name, DEFAULTS)
     
     @classmethod
     def save(cls, storage, filename=None):
@@ -133,7 +210,7 @@ class FileKit(object):
         """
         if not isinstance(storage, FileStorage):
             storage = FileStorage(storage, filename=filename)
-        filename = cls.uset.save(storage, name=filename)
+        filename = cls.get_upload_set().save(storage, name=filename)
         instance = cls(filename)
         instance.process(force=False)
         return instance
@@ -150,14 +227,25 @@ class FileKit(object):
         Returns the absolute path to the persisted file. Does not check if 
         the file exists.
         """
-        return self.uset.path(self.filename)
+        return self.get_upload_set().path(self.filename)
     
     @property
     def url(self):
         """
         Returns the URL for this file.
         """
-        return self.uset.url(self.filename)
+        return self.get_upload_set().url(self.filename)
+    
+    def to_dict(self):
+        """
+        Returns a dict of all field urls for this file.
+        """
+        fields = {}
+        for label in self.fields:
+            field = getattr(self, label)
+            if not field is None:
+                fields[label] = field.url
+        return fields
 
 
 class Processor(object):
