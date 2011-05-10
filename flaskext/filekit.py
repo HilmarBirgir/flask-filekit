@@ -302,6 +302,8 @@ class Resize(Processor):
     
     def process(self, fp):
         img = Image.open(fp)
+        if img.mode != "RGB":
+            img = img.convert("RGB")
         cur_width, cur_height = img.size
         if self.crop:
             crop_horz = 1
