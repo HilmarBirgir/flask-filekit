@@ -154,7 +154,7 @@ def configure_filekits(app, filekits):
     development mode. 
     
     """
-    if isinstance(filekits, FileKit):
+    if issubclass(filekits, FileKit):
         filekits = (filekits,)
     if '_filekits' not in app.modules:
         app.register_module(filekits_mod)
