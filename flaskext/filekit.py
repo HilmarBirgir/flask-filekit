@@ -154,7 +154,7 @@ def configure_filekits(app, filekits):
     development mode. 
     
     """
-    if issubclass(filekits, FileKit):
+    if not hasattr(filekits, '__iter__'):
         filekits = (filekits,)
     if '_filekits' not in app.modules:
         app.register_module(filekits_mod)
