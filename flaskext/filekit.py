@@ -54,7 +54,9 @@ class BoundField(object):
         with open(self.fkit.path) as fp:
             for processor in self._field.processors:
                 fp = processor(fp)
-            self.uset.save(FileStorage(fp), folder=self.folder, name=self.get_filename())
+            storage = FileStorage(fp)
+            storage.filename = self.get_filename()
+            self.uset.save(storage, folder=self.folder, name=self.get_filename())
         
     @property
     def path(self):
